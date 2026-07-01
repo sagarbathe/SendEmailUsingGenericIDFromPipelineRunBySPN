@@ -1,0 +1,109 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "logicAppName":  { "type": "string", "defaultValue": "la-fabric-send-email" },
+    "location":      { "type": "string", "defaultValue": "[resourceGroup().location]" },
+    "tenantId":      { "type": "string",       "metadata": { "description": "Entra ID tenant ID" } },
+    "clientId":      { "type": "string",       "metadata": { "description": "SPN Application (client) ID" } },
+    "clientSecret":  { "type": "securestring", "metadata": { "description": "SPN client secret — use Key Vault in production" } },
+    "serviceMailbox":{ "type": "string",       "metadata": { "description": "Generic service mailbox UPN, e.g. fabric-svc@contoso.com" } }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2016-06-01",
+      "name": "[parameters('logicAppName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "tenantId":       { "type": "string" },
+            "clientId":       { "type": "string" },
+            "clientSecret":   { "type": "securestring" },
+            "serviceMailbox": { "type": "string" }
+          },
+          "triggers": {
+            "manual": {
+              "type": "Request", "kind": "Http",
+              "inputs": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "recipientEmail": { "type": "string" },
+                    "subject":        { "type": "string" },
+                    "pipelineName":   { "type": "string" },
+                    "runId":          { "type": "string" },
+                    "callBackUri":    { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "actions": {
+            "GetGraphToken": {
+              "type": "Http", "runAfter": {},
+              "inputs": {
+                "method": "POST",
+                "uri": "@{concat('https://login.microsoftonline.com/', parameters('tenantId'), '/oauth2/v2.0/token')}",
+                "headers": { "Content-Type": "application/x-www-form-urlencoded" },
+                "body": "@{concat('grant_type=client_credentials&client_id=', parameters('clientId'), '&client_secret=', encodeUriComponent(parameters('clientSecret')), '&scope=https%3A%2F%2Fgraph.microsoft.com%2F.default')}"
+              }
+            },
+            "SendEmail": {
+              "type": "Http",
+              "runAfter": { "GetGraphToken": ["Succeeded"] },
+              "inputs": {
+                "method": "POST",
+                "uri": "@{concat('https://graph.microsoft.com/v1.0/users/', parameters('serviceMailbox'), '/sendMail')}",
+                "headers": {
+                  "Content-Type": "application/json",
+                  "Authorization": "@{concat('Bearer ', body('GetGraphToken')['access_token'])}"
+                },
+                "body": {
+                  "message": {
+                    "subject": "@{coalesce(triggerBody()?['subject'], 'Automated email from Fabric Pipeline')}",
+                    "body": {
+                      "contentType": "HTML",
+                      "content": "<h2>&#x1F916; Automated Email from Fabric Data Pipeline</h2><table border='1' cellpadding='8' style='border-collapse:collapse;font-family:Segoe UI,sans-serif'><tr style='background:#0078d4;color:white'><th>Component</th><th>Value</th></tr><tr><td><b>Triggered by</b></td><td>Service Principal (SPN) — no user login</td></tr><tr><td><b>Fabric Pipeline</b></td><td>@{coalesce(triggerBody()?['pipelineName'],'N/A')}</td></tr><tr><td><b>Run ID</b></td><td>@{coalesce(triggerBody()?['runId'],'N/A')}</td></tr><tr><td><b>Sent from</b></td><td>@{parameters('serviceMailbox')} (generic service mailbox)</td></tr></table>"
+                    },
+                    "toRecipients": [{ "emailAddress": { "address": "@{triggerBody()?['recipientEmail']}" } }],
+                    "from": { "emailAddress": { "address": "@{parameters('serviceMailbox')}", "name": "Fabric Pipeline Service" } }
+                  },
+                  "saveToSentItems": true
+                }
+              }
+            },
+            "PostCallback": {
+              "type": "Http",
+              "runAfter": { "SendEmail": ["Succeeded"] },
+              "inputs": {
+                "method": "POST",
+                "uri": "@{triggerBody()?['callBackUri']}",
+                "headers": { "Content-Type": "application/json" },
+                "body": { "Output": { "result": "Email sent successfully" }, "StatusCode": "200" }
+              }
+            },
+            "RespondToTrigger": {
+              "type": "Response",
+              "runAfter": { "PostCallback": ["Succeeded", "Failed", "Skipped"] },
+              "inputs": { "statusCode": 200, "body": { "result": "Processing initiated" } }
+            }
+          }
+        },
+        "parameters": {
+          "tenantId":      { "value": "[parameters('tenantId')]" },
+          "clientId":      { "value": "[parameters('clientId')]" },
+          "clientSecret":  { "value": "[parameters('clientSecret')]" },
+          "serviceMailbox":{ "value": "[parameters('serviceMailbox')]" }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "logicAppResourceId": { "type": "string", "value": "[resourceId('Microsoft.Logic/workflows', parameters('logicAppName'))]" }
+  }
+}
