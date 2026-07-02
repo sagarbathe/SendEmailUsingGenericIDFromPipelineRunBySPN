@@ -1,6 +1,23 @@
 # Send Email from Generic Service Mailbox via Fabric Pipeline triggered by SPN
 
-> **A Microsoft Fabric demo: a Service Principal (SPN) triggers a Data Pipeline that sends email from a generic service mailbox — zero user credentials involved.**
+## Overview
+
+This repository provides **reference implementations and reusable scripts** for two common Microsoft Fabric production patterns:
+
+| Pattern | What it demonstrates |
+|---|---|
+| **SPN-triggered pipeline with service email** | A Service Principal (SPN) authenticates to the Fabric REST API and triggers a Data Pipeline. The pipeline sends email from a generic service mailbox (not a human account) via Microsoft Graph — zero user credentials involved at runtime. |
+| **SPN ownership of Fabric items post-deployment** | After deploying Fabric items from a staging workspace (STG) to a production workspace (DATA), a script transfers ownership of every item to the SPN. This prevents failures when team members leave and ensures all scheduled runs execute under a service identity. |
+
+### What's included
+
+- **scripts/Invoke-FabricPipelineAsSPN.ps1** — Step-by-step demo script: SPN acquires a Fabric token, triggers the pipeline, polls until completion. Ideal for live customer demos.
+- **scripts/Set-FabricItemOwnership.ps1** — Enumerates every item in a Fabric workspace and transfers ownership to the SPN via the Fabric REST API. Designed to run as a post-deployment CI/CD step.
+- **logic-app/la-send-email-arm.json** — ARM template for the Azure Logic App that receives the pipeline WebHook call, sends email via Graph API using SPN client credentials, and posts the callback to signal pipeline completion.
+
+### Calling patterns covered
+
+PowerShell · curl · Python · GitHub Actions · Azure DevOps — with examples for each.
 
 ---
 
