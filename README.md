@@ -292,12 +292,109 @@ New-ApplicationAccessPolicy `
 
 ---
 
+---
+
+## Making the SPN Owner of All Fabric Items in Production
+
+When deploying from a staging (STG) workspace to production (DATA), all Fabric items should be owned by the SPN rather than individual developers. This ensures scheduled runs and refreshes continue even when team members change.
+
+### Option 1 — Manual (Fabric Portal) ⚠️ Not scalable
+
+Only **semantic models** have a UI option:
+> Workspace → item → `...` menu → **Settings** → **Take ownership**
+
+Not practical for multiple items — use the programmatic approach below.
+
+### Option 2 — PowerShell script (run manually or ad-hoc)
+
+```powershell
+.\scripts\Set-FabricItemOwnership.ps1 `
+  -TenantId     "<TENANT_ID>" `
+  -ClientId     "<SPN_CLIENT_ID>" `
+  -ClientSecret "<SPN_CLIENT_SECRET>" `
+  -WorkspaceId  "<PROD_WORKSPACE_ID>"
+```
+
+The script (`scripts/Set-FabricItemOwnership.ps1`) enumerates **all items** in the workspace and transfers ownership to the SPN using the single Fabric REST API endpoint that works across all item types:
+
+```
+POST /v1/workspaces/{workspaceId}/items/{itemId}/takeOwnership
+```
+
+### Option 3 — Post-deployment step in CI/CD *(recommended)*
+
+Add as the final step of every deployment to the DATA workspace:
+
+**Azure DevOps:**
+```yaml
+- task: PowerShell@2
+  displayName: 'Transfer ownership to SPN'
+  inputs:
+    filePath: 'scripts/Set-FabricItemOwnership.ps1'
+    arguments: >
+      -TenantId     "$(TENANT_ID)"
+      -ClientId     "$(SPN_CLIENT_ID)"
+      -ClientSecret "$(SPN_CLIENT_SECRET)"
+      -WorkspaceId  "$(DATA_WORKSPACE_ID)"
+```
+
+**GitHub Actions:**
+```yaml
+- name: Transfer ownership to SPN
+  shell: pwsh
+  run: |
+    ./scripts/Set-FabricItemOwnership.ps1 `
+      -TenantId     "${{ secrets.TENANT_ID }}" `
+      -ClientId     "${{ secrets.SPN_CLIENT_ID }}" `
+      -ClientSecret "${{ secrets.SPN_CLIENT_SECRET }}" `
+      -WorkspaceId  "${{ secrets.DATA_WORKSPACE_ID }}"
+```
+
+### Option 4 — After Fabric Deployment Pipeline run
+
+If you use Fabric native deployment pipelines (STG → DATA), trigger the ownership script immediately after the deployment operation completes:
+
+```powershell
+# Trigger deployment via API
+$op = Invoke-RestMethod -Uri "https://api.fabric.microsoft.com/v1/deploymentPipelines/$pipelineId/deploy" `
+    -Method POST -Headers $headers -Body $deployBody
+
+# Poll until complete
+do {
+    Start-Sleep 10
+    $status = Invoke-RestMethod -Uri $op.location -Headers $headers
+} while ($status.status -eq "Running")
+
+# Transfer ownership to SPN
+.\scripts\Set-FabricItemOwnership.ps1 -TenantId $t -ClientId $c -ClientSecret $s -WorkspaceId $DataWorkspaceId
+```
+
+### Item type coverage
+
+| Item type | Supported | Notes |
+|---|---|---|
+| DataPipeline | ✅ | |
+| Lakehouse | ✅ | |
+| Notebook | ✅ | |
+| SemanticModel | ✅ | Also available via Power BI `Default.TakeOver` API |
+| Dataflow Gen2 | ✅ | |
+| Warehouse | ✅ | |
+| SparkJobDefinition | ✅ | |
+| MLModel / MLExperiment | ✅ | |
+| Report | ⚠️ Skip | Ownership follows the semantic model; no independent owner |
+| Environment | ✅ | |
+
+> **Prerequisite:** The SPN must be **Contributor or higher** on the production workspace.
+
+---
+
 ## Repository structure
 
 ```
 ├── README.md
 ├── scripts/
-│   └── Invoke-FabricPipelineAsSPN.ps1   # PowerShell demo script (fill placeholders)
+│   ├── Invoke-FabricPipelineAsSPN.ps1   # PowerShell demo script (fill placeholders)
+│   └── Set-FabricItemOwnership.ps1      # Transfer ownership of all workspace items to SPN
 └── logic-app/
     └── la-send-email-arm.json           # ARM template — deploy the Logic App
 ```
